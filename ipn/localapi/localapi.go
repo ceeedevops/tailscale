@@ -153,6 +153,12 @@ type Handler struct {
 	// cert fetching access.
 	PermitCert bool
 
+	// PermitLocalAdmin is whether the client may write machine-wide state to
+	// the local machine. Currently relevant to Windows where tailscaled runs as
+	// LocalSystem (ie, root) but we want to restrict some localapi operations
+	// only to clients who actually have administrative access.
+	PermitLocalAdmin bool
+
 	b            *ipnlocal.LocalBackend
 	logf         logger.Logf
 	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand

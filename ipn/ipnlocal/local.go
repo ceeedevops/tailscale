@@ -259,6 +259,7 @@ type LocalBackend struct {
 	componentLogUntil       map[string]componentLogState
 	// c2nUpdateStatus is the status of c2n-triggered client update.
 	c2nUpdateStatus updateStatus
+	currentUser             ipnauth.WindowsToken
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
@@ -2676,7 +2677,7 @@ func (b *LocalBackend) shouldUploadServices() bool {
 	return !p.ShieldsUp() && b.netMap.CollectServices
 }
 
-// SetCurrentUserID is used to implement support for multi-user systems (only
+// SetCurrentUser is used to implement support for multi-user systems (only
 // Windows 2022-11-25). On such systems, the uid is used to determine which
 // user's state should be used. The current user is maintained by active
 // connections open to the backend.
@@ -2691,18 +2692,29 @@ func (b *LocalBackend) shouldUploadServices() bool {
 // unattended mode. The user must disable unattended mode before the user can be
 // changed.
 //
-// On non-multi-user systems, the uid should be set to empty string.
-func (b *LocalBackend) SetCurrentUserID(uid ipn.WindowsUserID) {
+// On non-multi-user systems, the token should be set to nil.
+func (b *LocalBackend) SetCurrentUser(token ipnauth.WindowsToken) error {
+	var uid ipn.WindowsUserID
+	if token != nil {
+		var err error
+		uid, err = token.UID()
+		if err != nil {
+			return err
+		}
+	}
+
 	b.mu.Lock()
 	if b.pm.CurrentUserID() == uid {
 		b.mu.Unlock()
-		return
+		return nil
 	}
 	if err := b.pm.SetCurrentUserID(uid); err != nil {
 		b.mu.Unlock()
-		return
+		return nil
 	}
+	b.currentUser = token
 	b.resetForProfileChangeLockedOnEntry()
+	return nil
 }
 
 func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
@@ -4044,6 +4056,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 
 	b.setNetMapLocked(nil)
 	b.pm.Reset()
+	b.currentUser = nil
 	b.keyExpired = false
 	b.authURL = ""
 	b.authURLSticky = ""

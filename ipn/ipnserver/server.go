@@ -202,6 +202,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		lah := localapi.NewHandler(lb, s.logf, s.netMon, s.backendLogID)
 		lah.PermitRead, lah.PermitWrite = s.localAPIPermissions(ci)
 		lah.PermitCert = s.connCanFetchCerts(ci)
+		lah.PermitLocalAdmin = s.connIsLocalAdmin(ci)
 		lah.ServeHTTP(w, r)
 		return
 	}
@@ -238,12 +239,30 @@ func (s *Server) checkConnIdentityLocked(ci *ipnauth.ConnIdentity) error {
 	// If clients are already connected, verify they're the same user.
 	// This mostly matters on Windows at the moment.
 	if len(s.activeReqs) > 0 {
+		chkTok, err := ci.WindowsToken()
+		if err != nil {
+			return err
+		}
+
 		var active *ipnauth.ConnIdentity
 		for _, active = range s.activeReqs {
 			break
 		}
-		if active != nil && ci.WindowsUserID() != active.WindowsUserID() {
-			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User().Username, active.Pid())}
+		if active != nil {
+			activeTok, err := active.WindowsToken()
+			if err != nil {
+				return err
+			}
+
+			if !chkTok.EqualUIDs(activeTok) {
+				var b strings.Builder
+				b.WriteString("Tailscale already in use")
+				if username, err := activeTok.Username(); err == nil {
+					fmt.Fprintf(&b, " by %s", username)
+				}
+				fmt.Fprintf(&b, ", pid %d", active.Pid())
+				return inUseOtherUserError{errors.New(b.String())}
+			}
 		}
 	}
 	if err := s.mustBackend().CheckIPNConnectionAllowed(ci); err != nil {
@@ -341,6 +360,26 @@ func (s *Server) connCanFetchCerts(ci *ipnauth.ConnIdentity) bool {
 	return false
 }
 
+// connIsLocalAdmin reports whether ci has administrative access to the local
+// machine, for whatever that means with respect to the current OS.
+//
+// This returns true only on Windows machines when the client user is a
+// member of the built-in Administrators group (but not necessarily elevated).
+// This is useful because, on Windows, tailscaled itself always runs with
+// elevated rights: we want to avoid privilege escalation for certain mutative operations.
+func (s *Server) connIsLocalAdmin(ci *ipnauth.ConnIdentity) bool {
+	tok, err := ci.WindowsToken()
+	if err != nil {
+		return false
+	}
+
+	isAdmin, err := tok.IsAdministrator()
+	if err != nil {
+		return false
+	}
+	return isAdmin
+}
+
 // addActiveHTTPRequest adds c to the server's list of active HTTP requests.
 //
 // If the returned error may be of type inUseOtherUserError.
@@ -372,14 +411,27 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 
 	mak.Set(&s.activeReqs, req, ci)
 
-	if uid := ci.WindowsUserID(); uid != "" && len(s.activeReqs) == 1 {
-		// Tell the LocalBackend about the identity we're now running as.
-		lb.SetCurrentUserID(uid)
-		if s.lastUserID != uid {
-			if s.lastUserID != "" {
-				doReset = true
+	if len(s.activeReqs) == 1 {
+		token, err := ci.WindowsToken()
+		if err != nil {
+			if !errors.Is(err, ipnauth.ErrNotImplemented) {
+				s.logf("error obtaining access token: %v", err)
 			}
-			s.lastUserID = uid
+		} else {
+			// Tell the LocalBackend about the identity we're now running as.
+			if err := lb.SetCurrentUser(token); err != nil {
+				return nil, err
+			}
+			uid, err := token.UID()
+			if err != nil {
+				return nil, err
+			}
+			if s.lastUserID != uid {
+				if s.lastUserID != "" {
+					doReset = true
+				}
+				s.lastUserID = uid
+			}
 		}
 	}
 

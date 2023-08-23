@@ -21,3 +21,7 @@ func GetConnIdentity(_ logger.Logf, c net.Conn) (ci *ConnIdentity, err error) {
 	ci.creds, _ = peercred.Get(c)
 	return ci, nil
 }
+
+func (ci *ConnIdentity) WindowsToken() (WindowsToken, error) {
+	return nil, ErrNotImplemented
+}
