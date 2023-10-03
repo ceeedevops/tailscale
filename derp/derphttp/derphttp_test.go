@@ -211,7 +211,6 @@ func TestPing(t *testing.T) {
 
 func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derp.Server) {
 	s = derp.NewServer(k, t.Logf)
-
 	httpsrv := &http.Server{
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		Handler:      Handler(s),
@@ -222,12 +221,12 @@ func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derp.S
 		t.Fatal(err)
 	}
 	serverURL = "http://" + ln.Addr().String()
-	t.Logf("server key %v URL: %s", serverURL, k.Public().ShortString())
 	s.SetMeshKey("1234")
 
 	go func() {
 		if err := httpsrv.Serve(ln); err != nil {
 			if err == http.ErrServerClosed {
+				t.Logf("server closed")
 				return
 			}
 			panic(err)
@@ -247,15 +246,12 @@ func newWatcherClient(t *testing.T, watcherPrivateKey key.NodePrivate, serverToW
 }
 
 func TestRunWatch(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Make the watcher server
 	serverPrivateKey1 := key.NewNode()
 	_, s1 := newTestServer(t, serverPrivateKey1)
 	defer s1.Close()
 
-	// Make the watched sever
+	// Make the watched server
 	serverPrivateKey2 := key.NewNode()
 	serverURL2, s2 := newTestServer(t, serverPrivateKey2)
 	defer s2.Close()
@@ -264,12 +260,17 @@ func TestRunWatch(t *testing.T) {
 	watcher1 := newWatcherClient(t, serverPrivateKey1, serverURL2)
 	defer watcher1.Close()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	var peers atomic.Int32
 	add := func(k key.NodePublic, _ netip.AddrPort) { t.Logf("add1: %v", k.ShortString()); peers.Add(1) }
 	remove := func(k key.NodePublic) { t.Logf("remove1: %v", k.ShortString()); peers.Add(-1) }
 
-	go watcher1.RunWatchConnectionLoop(context.Background(), serverPrivateKey1.Public(), t.Logf, add, remove)
+	// Start the watcher thread
+	go watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove)
 
+	// Check that the watcher thread has connected the first time
 	for i := 0; i < 15; i++ {
 		t.Logf("peers %v", peers.Load())
 		if peers.Load() >= 1 {
@@ -283,10 +284,10 @@ func TestRunWatch(t *testing.T) {
 		t.Fatal("wrong number of peers added during watcher connection")
 	}
 
-	// Kick off a thread to send packets on the same connection as fast as
-	// possible.
-	t.Logf("reconnecting watcher1 to server2 by sending invalid ClosePeer")
+	// Start threads to send packets on the same connection as the watcher
+	// thread as fast as possible.
 	for i := 0; i < 10; i++ {
+		t.Logf("starting goroutine to send bogus Forward packets")
 		go func() {
 			ticker := time.NewTicker(50 * time.Millisecond)
 			for {
@@ -300,16 +301,16 @@ func TestRunWatch(t *testing.T) {
 		}()
 	}
 
-	// Now close the connection and check if it is re-established and we get
+	// Now close the connection and check if it is reconnects and gives us
 	// peer updates.
-
 	for i := 0; i < 10; i++ {
+		t.Logf("closing connection and waiting for reconnect")
 		watcher1.mu.Lock()
 		watcher1.netConn.Close()
 		watcher1.mu.Unlock()
 
 		for i := 0; i < 15; i++ {
-			t.Logf("peers %v", peers.Load())
+			t.Logf("peers %v ctx %v", peers.Load(), ctx.Err())
 			if peers.Load() >= 1 {
 				break
 			}

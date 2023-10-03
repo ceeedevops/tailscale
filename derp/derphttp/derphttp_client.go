@@ -283,6 +283,7 @@ func useWebsockets() bool {
 }
 
 func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, connGen int, err error) {
+	c.logf("connect()")
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {

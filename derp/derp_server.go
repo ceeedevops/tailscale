@@ -741,7 +741,6 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		if envknob.Bool("DERP_PROBER_DEBUG_LOGS") && clientInfo.IsProber {
 			c.debug = true
 		}
-		s.logf("c.info.IsWatcher %v", c.info.IsWatcher)
 		if c.info.IsWatcher {
 			if err := c.makeWatcher(); err != nil {
 				return err
