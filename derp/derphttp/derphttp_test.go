@@ -9,7 +9,9 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -205,4 +207,119 @@ func TestPing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
+}
+
+func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derp.Server) {
+	s = derp.NewServer(k, t.Logf)
+
+	httpsrv := &http.Server{
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		Handler:      Handler(s),
+	}
+
+	ln, err := net.Listen("tcp4", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverURL = "http://" + ln.Addr().String()
+	t.Logf("server key %v URL: %s", serverURL, k.Public().ShortString())
+	s.SetMeshKey("1234")
+
+	go func() {
+		if err := httpsrv.Serve(ln); err != nil {
+			if err == http.ErrServerClosed {
+				return
+			}
+			panic(err)
+		}
+	}()
+	return
+}
+
+func newWatcherClient(t *testing.T, watcherPrivateKey key.NodePrivate, serverToWatchURL string) (c *Client) {
+	c, err := NewClient(watcherPrivateKey, serverToWatchURL, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.MeshKey = "1234"
+	c.IsWatcher = true
+	return
+}
+
+func TestRunWatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Make the watcher server
+	serverPrivateKey1 := key.NewNode()
+	_, s1 := newTestServer(t, serverPrivateKey1)
+	defer s1.Close()
+
+	// Make the watched sever
+	serverPrivateKey2 := key.NewNode()
+	serverURL2, s2 := newTestServer(t, serverPrivateKey2)
+	defer s2.Close()
+
+	// Make the watcher (but it is not connected yet)
+	watcher1 := newWatcherClient(t, serverPrivateKey1, serverURL2)
+	defer watcher1.Close()
+
+	var peers atomic.Int32
+	add := func(k key.NodePublic, _ netip.AddrPort) { t.Logf("add1: %v", k.ShortString()); peers.Add(1) }
+	remove := func(k key.NodePublic) { t.Logf("remove1: %v", k.ShortString()); peers.Add(-1) }
+
+	go watcher1.RunWatchConnectionLoop(context.Background(), serverPrivateKey1.Public(), t.Logf, add, remove)
+
+	for i := 0; i < 15; i++ {
+		t.Logf("peers %v", peers.Load())
+		if peers.Load() >= 1 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	t.Logf("peers %v", peers.Load())
+	if peers.Load() != 1 {
+		t.Fatal("wrong number of peers added during watcher connection")
+	}
+
+	// Kick off a thread to send packets on the same connection as fast as
+	// possible.
+	t.Logf("reconnecting watcher1 to server2 by sending invalid ClosePeer")
+	for i := 0; i < 10; i++ {
+		go func() {
+			ticker := time.NewTicker(50 * time.Millisecond)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+				}
+			}
+		}()
+	}
+
+	// Now close the connection and check if it is re-established and we get
+	// peer updates.
+
+	for i := 0; i < 10; i++ {
+		watcher1.mu.Lock()
+		watcher1.netConn.Close()
+		watcher1.mu.Unlock()
+
+		for i := 0; i < 15; i++ {
+			t.Logf("peers %v", peers.Load())
+			if peers.Load() >= 1 {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		t.Logf("peers %v", peers.Load())
+		if peers.Load() != 1 {
+			t.Fatal("wrong number of peers added during watcher connection")
+		}
+	}
+
+	t.Logf("\n\n\nSHUTTING DOWN\n\n\n")
 }

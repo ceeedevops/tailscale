@@ -101,11 +101,10 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	}
 
 	for ctx.Err() == nil {
-		err := c.WatchConnectionChanges()
+		_, _, err := c.connect(c.newContext(), "derphttp.mesh_client.RunWatchConnectionLoop")
 		if err != nil {
-			clear()
-			logf("WatchConnectionChanges: %v", err)
-			sleep(retryInterval)
+			// XXX log something
+			logf("connect() failed")
 			continue
 		}
 

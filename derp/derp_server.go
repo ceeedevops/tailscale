@@ -362,6 +362,16 @@ func (s *Server) HasMeshKey() bool { return s.meshKey != "" }
 // MeshKey returns the configured mesh key, if any.
 func (s *Server) MeshKey() string { return s.meshKey }
 
+// makeWatcher upgrades the connection to watch peer updates
+func (c *sclient) makeWatcher() error {
+	c.logf("makeWatcher called")
+	if !c.canMesh {
+		return errors.New("insufficient permissions")
+	}
+	c.s.addWatcher(c)
+	return nil
+}
+
 // PrivateKey returns the server's private key.
 func (s *Server) PrivateKey() key.NodePrivate { return s.privateKey }
 
@@ -731,6 +741,12 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		if envknob.Bool("DERP_PROBER_DEBUG_LOGS") && clientInfo.IsProber {
 			c.debug = true
 		}
+		s.logf("c.info.IsWatcher %v", c.info.IsWatcher)
+		if c.info.IsWatcher {
+			if err := c.makeWatcher(); err != nil {
+				return err
+			}
+		}
 	}
 	if s.debug {
 		c.debug = true
@@ -800,8 +816,6 @@ func (c *sclient) run(ctx context.Context) error {
 			err = c.handleFrameSendPacket(ft, fl)
 		case frameForwardPacket:
 			err = c.handleFrameForwardPacket(ft, fl)
-		case frameWatchConns:
-			err = c.handleFrameWatchConns(ft, fl)
 		case frameClosePeer:
 			err = c.handleFrameClosePeer(ft, fl)
 		case framePing:
@@ -829,17 +843,6 @@ func (c *sclient) handleFrameNotePreferred(ft frameType, fl uint32) error {
 		return fmt.Errorf("frameNotePreferred ReadByte: %v", err)
 	}
 	c.setPreferred(v != 0)
-	return nil
-}
-
-func (c *sclient) handleFrameWatchConns(ft frameType, fl uint32) error {
-	if fl != 0 {
-		return fmt.Errorf("handleFrameWatchConns wrong size")
-	}
-	if !c.canMesh {
-		return fmt.Errorf("insufficient permissions")
-	}
-	c.s.addWatcher(c)
 	return nil
 }
 
@@ -1204,12 +1207,13 @@ func (s *Server) noteClientActivity(c *sclient) {
 type serverInfo struct {
 	Version int `json:"version,omitempty"`
 
-	TokenBucketBytesPerSecond int `json:",omitempty"`
-	TokenBucketBytesBurst     int `json:",omitempty"`
+	TokenBucketBytesPerSecond int  `json:",omitempty"`
+	TokenBucketBytesBurst     int  `json:",omitempty"`
+	AtomicWatchConn           bool `json:",omitempty"`
 }
 
 func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.NodePublic) error {
-	msg, err := json.Marshal(serverInfo{Version: ProtocolVersion})
+	msg, err := json.Marshal(serverInfo{Version: ProtocolVersion, AtomicWatchConn: true})
 	if err != nil {
 		return err
 	}

@@ -93,6 +93,8 @@ const (
 	// is closed. Otherwise, the client is initially flooded with
 	// framePeerPresent for all connected nodes, and then a stream of
 	// framePeerPresent & framePeerGone has peers connect and disconnect.
+	//
+	// TODO: obsolete
 	frameWatchConns = frameType(0x10)
 
 	// frameClosePeer is a privileged frame type (requires the
