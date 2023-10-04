@@ -1097,6 +1097,11 @@ type RegisterRequest struct {
 	Timestamp     *time.Time    `json:",omitempty"` // creation time of request to prevent replay
 	DeviceCert    []byte        `json:",omitempty"` // X.509 certificate for client device
 	Signature     []byte        `json:",omitempty"` // as described by SignatureType
+
+	// Tailnet is a string that includes the Tailnet name
+	// and also if logging into the Tailnet is required or not
+	// depending on MDM settings.
+	Tailnet string `json:",omitempty"`
 }
 
 // RegisterResponse is returned by the server in response to a RegisterRequest.

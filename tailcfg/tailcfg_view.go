@@ -790,6 +790,7 @@ func (v RegisterRequestView) DeviceCert() views.ByteSlice[[]byte] {
 func (v RegisterRequestView) Signature() views.ByteSlice[[]byte] {
 	return views.ByteSliceOf(v.ж.Signature)
 }
+func (v RegisterRequestView) Tailnet() string { return v.ж.Tailnet }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RegisterRequestViewNeedsRegeneration = RegisterRequest(struct {
@@ -808,6 +809,7 @@ var _RegisterRequestViewNeedsRegeneration = RegisterRequest(struct {
 	Timestamp        *time.Time
 	DeviceCert       []byte
 	Signature        []byte
+	Tailnet          string
 }{})
 
 // View returns a readonly view of DERPHomeParams.
