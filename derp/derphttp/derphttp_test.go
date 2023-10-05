@@ -245,6 +245,38 @@ func newWatcherClient(t *testing.T, watcherPrivateKey key.NodePrivate, serverToW
 	return
 }
 
+// Simulate a broken connection
+func (c *Client) breakConnection(brokenClient *derp.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != brokenClient {
+		return
+	}
+	if c.netConn != nil {
+		c.netConn.Close()
+		c.netConn = nil
+	}
+	c.client = nil
+}
+
+// We are testing that if the connection breaks and is re-established by
+// something other than the RunWatchConnectionLoop RecvDetail(), that we still
+// get peer updates.
+//
+// Thread 1: Server 1 serving requests. This is the watcher server.
+// Thread 2: Server 2 serving requests. This is the server being watched.
+// Thread 3: Watcher thread, this is a client on server 1, watching server 2, getting a peer update that itself is connected to server 2.
+// Thread 4: Sending packets on the watcher connection
+// Thread 5 (foreground): Breaking the connection, then waiting for the watcher thread to get the peer update, process it, and update the peer count.
+//
+// Our problem is: If thread 2 doesn't get a chance to run, then it can't send
+// the peer update packet. If thread 3 doesn't get a chance to run, then it
+// can't process the peer update packet. So we want to stop Thread 4 and 5 and 1
+// and only let 3 and 4 run. Otherwise the other 3 can keep getting scheduled
+// for a long time.
+//
+// Without this pause and wait, this turns into a halting problem.
+
 func TestRunWatch(t *testing.T) {
 	// Make the watcher server
 	serverPrivateKey1 := key.NewNode()
@@ -258,16 +290,19 @@ func TestRunWatch(t *testing.T) {
 
 	// Make the watcher (but it is not connected yet)
 	watcher1 := newWatcherClient(t, serverPrivateKey1, serverURL2)
-	defer watcher1.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Make channel to wake up the connection breaking thread when the
+	// watcher has run.
+	ch := make(chan interface{}, 1)
+
 	var peers atomic.Int32
-	add := func(k key.NodePublic, _ netip.AddrPort) { t.Logf("add1: %v", k.ShortString()); peers.Add(1) }
+	add := func(k key.NodePublic, _ netip.AddrPort) { t.Logf("add1: %v", k.ShortString()); peers.Add(1); ch <- 0 }
 	remove := func(k key.NodePublic) { t.Logf("remove1: %v", k.ShortString()); peers.Add(-1) }
 
-	// Start the watcher thread
+	// Start the watcher thread (which connects to the watched server)
 	go watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove)
 
 	// Check that the watcher thread has connected the first time
@@ -285,42 +320,56 @@ func TestRunWatch(t *testing.T) {
 	}
 
 	// Start threads to send packets on the same connection as the watcher
-	// thread as fast as possible.
+	// thread, then stop and wait until watcher1 has run.
 	for i := 0; i < 10; i++ {
 		t.Logf("starting goroutine to send bogus Forward packets")
 		go func() {
-			ticker := time.NewTicker(50 * time.Millisecond)
+			ticker := time.Ticker(50 * time.Millisecond)
 			for {
+				// phase 1: send packets for a while
+				// phase 2: wait till we get the signal to start again
+				// repeat until we get the ctx.Done() signal
 				select {
 				case <-ctx.Done():
 					return
-				case <-ticker.C:
-					watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+				case <-ch:
+					// We got the signal saying we can run
+					select {
+					case <-ticker.C:
+						watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}()
 	}
 
-	// Now close the connection and check if it is reconnects and gives us
-	// peer updates.
+	// Now break the connection, then stop and wait for watcher1 to
+	// run and check if it reconnected and sent us peer updates.
 	for i := 0; i < 10; i++ {
-		t.Logf("closing connection and waiting for reconnect")
-		watcher1.mu.Lock()
-		watcher1.netConn.Close()
-		watcher1.mu.Unlock()
+		t.Logf("breaking connection")
+		watcher1.breakConnection(watcher1.client)
 
-		for i := 0; i < 15; i++ {
-			t.Logf("peers %v ctx %v", peers.Load(), ctx.Err())
-			if peers.Load() >= 1 {
-				break
+		// XXX switch to our special test timer clock
+		timer := time.NewTimer(5 * time.Second)
+
+		// now wait for watcher to run
+		select {
+		case <-timer.C:
+			// failed
+		case <-ch:
+			// check the number of peers
+			p := peers.Load()
+			if p != 1 {
+				t.Fatalf("wrong number of peers added during watcher connection: %v", p)
 			}
-			time.Sleep(500 * time.Millisecond)
-		}
-		t.Logf("peers %v", peers.Load())
-		if peers.Load() != 1 {
-			t.Fatal("wrong number of peers added during watcher connection")
+		case <-timer.C:
+			// failure, watcher never ran
+			t.Fatalf("watcher never ran")
 		}
 	}
 
 	t.Logf("\n\n\nSHUTTING DOWN\n\n\n")
+	// now cancel() should be called
 }
