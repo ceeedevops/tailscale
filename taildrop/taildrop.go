@@ -107,7 +107,7 @@ func validFilenameRune(r rune) bool {
 	return unicode.IsPrint(r)
 }
 
-func (s *Handler) diskPath(baseName string) (fullPath string, ok bool) {
+func (s *Handler) joinDir(baseName string) (fullPath string, ok bool) {
 	if !utf8.ValidString(baseName) {
 		return "", false
 	}

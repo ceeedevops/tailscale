@@ -173,7 +173,7 @@ func (s *Handler) DeleteFile(baseName string) error {
 	if s.DirectFileMode {
 		return errors.New("deletes not allowed in direct mode")
 	}
-	path, ok := s.diskPath(baseName)
+	path, ok := s.joinDir(baseName)
 	if !ok {
 		return errors.New("bad filename")
 	}
@@ -233,7 +233,7 @@ func (s *Handler) OpenFile(baseName string) (rc io.ReadCloser, size int64, err e
 	if s.DirectFileMode {
 		return nil, 0, errors.New("opens not allowed in direct mode")
 	}
-	path, ok := s.diskPath(baseName)
+	path, ok := s.joinDir(baseName)
 	if !ok {
 		return nil, 0, errors.New("bad filename")
 	}

@@ -102,7 +102,7 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) (finalSize i
 		http.Error(w, "bad path encoding", http.StatusBadRequest)
 		return finalSize, success
 	}
-	dstFile, ok := h.diskPath(baseName)
+	dstFile, ok := h.joinDir(baseName)
 	if !ok {
 		http.Error(w, "bad filename", http.StatusBadRequest)
 		return finalSize, success
