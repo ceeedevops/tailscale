@@ -160,8 +160,10 @@ func (s *serveListener) shouldWarnAboutListenError(err error) bool {
 	return true
 }
 
-// handleServeListenersAccept accepts connections for the Listener.
-// Calls incoming handler in a new goroutine for each accepted connection.
+// handleServeListenersAccept accepts connections for the Listener. It calls
+// incoming the handler in a new goroutine for each accepted connection. This is
+// used to handle local "tailscale serve" traffic originating from the machine
+// itself.
 func (s *serveListener) handleServeListenersAccept(ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
@@ -171,7 +173,7 @@ func (s *serveListener) handleServeListenersAccept(ln net.Listener) error {
 		srcAddr := conn.RemoteAddr().(*net.TCPAddr).AddrPort()
 		handler := s.b.tcpHandlerForServe(s.ap.Port(), srcAddr)
 		if handler == nil {
-			s.b.logf("serve RST for %v", srcAddr)
+			s.b.logf("[unexpected] local-serve: no handler for %v to port %v", srcAddr, s.ap.Port())
 			conn.Close()
 			continue
 		}
@@ -329,28 +331,29 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 	b.mu.Lock()
 	sc := b.serveConfig
 	b.mu.Unlock()
+	logf := logger.WithPrefix(b.logf, "handleIngress: ")
 
 	if !sc.Valid() {
-		b.logf("localbackend: got ingress conn w/o serveConfig; rejecting")
+		logf("got ingress conn w/o serveConfig; rejecting")
 		sendRST()
 		return
 	}
 
 	if !sc.HasFunnelForTarget(target) {
-		b.logf("localbackend: got ingress conn for unconfigured %q; rejecting", target)
+		logf("got ingress conn for unconfigured %q; rejecting", target)
 		sendRST()
 		return
 	}
 
 	_, port, err := net.SplitHostPort(string(target))
 	if err != nil {
-		b.logf("localbackend: got ingress conn for bad target %q; rejecting", target)
+		logf("got ingress conn for bad target %q; rejecting", target)
 		sendRST()
 		return
 	}
 	port16, err := strconv.ParseUint(port, 10, 16)
 	if err != nil {
-		b.logf("localbackend: got ingress conn for bad target %q; rejecting", target)
+		logf("got ingress conn for bad target %q; rejecting", target)
 		sendRST()
 		return
 	}
@@ -360,7 +363,7 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 		if handler != nil {
 			c, ok := getConnOrReset()
 			if !ok {
-				b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
+				logf("getConn didn't complete from %v to port %v", srcAddr, dport)
 				return
 			}
 			handler(c)
@@ -371,12 +374,13 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 	// extend serveHTTPContext or similar.
 	handler := b.tcpHandlerForServe(dport, srcAddr)
 	if handler == nil {
+		logf("[unexpected] no matching ingress serve handler for %v to port %v", srcAddr, dport)
 		sendRST()
 		return
 	}
 	c, ok := getConnOrReset()
 	if !ok {
-		b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
+		logf("getConn didn't complete from %v to port %v", srcAddr, dport)
 		return
 	}
 	handler(c)
@@ -390,13 +394,11 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) 
 	b.mu.Unlock()
 
 	if !sc.Valid() {
-		b.logf("[unexpected] localbackend: got TCP conn w/o serveConfig; from %v to port %v", srcAddr, dport)
 		return nil
 	}
 
 	tcph, ok := sc.FindTCP(dport)
 	if !ok {
-		b.logf("[unexpected] localbackend: got TCP conn without TCP config for port %v; from %v", dport, srcAddr)
 		return nil
 	}
 
@@ -468,7 +470,6 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) 
 		}
 	}
 
-	b.logf("closing TCP conn to port %v (from %v) with actionless TCPPortHandler", dport, srcAddr)
 	return nil
 }
 
