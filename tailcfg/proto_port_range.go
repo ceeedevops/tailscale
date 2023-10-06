@@ -29,6 +29,17 @@ type ProtoPortRange struct {
 	Ports PortRange
 }
 
+// UnmarshalText implements the encoding.TextUnmarshaler interface. See
+// ProtoPortRange for the supported formats.
+func (ppr *ProtoPortRange) UnmarshalText(text []byte) error {
+	ppr2, err := parseProtoPortRange(string(text))
+	if err != nil {
+		return err
+	}
+	*ppr = *ppr2
+	return nil
+}
+
 func (ppr ProtoPortRange) String() string {
 	if ppr.Proto == 0 {
 		if ppr.Ports == PortRangeAny {

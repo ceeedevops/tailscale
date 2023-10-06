@@ -4,11 +4,14 @@
 package tailcfg
 
 import (
+	"encoding"
 	"errors"
 	"testing"
 
 	"tailscale.com/types/ipproto"
 )
+
+var _ encoding.TextUnmarshaler = (*ProtoPortRange)(nil)
 
 func TestProtoPortRangeParsing(t *testing.T) {
 	pr := func(s, e uint16) PortRange {
@@ -44,7 +47,8 @@ func TestProtoPortRangeParsing(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.in, func(t *testing.T) {
-			ppr, err := parseProtoPortRange(tc.in)
+			var ppr ProtoPortRange
+			err := ppr.UnmarshalText([]byte(tc.in))
 			if gotErr, wantErr := err != nil, tc.err != nil; gotErr != wantErr {
 				t.Fatalf("got err %v; want %v", err, tc.err)
 			} else if gotErr {
@@ -53,7 +57,7 @@ func TestProtoPortRangeParsing(t *testing.T) {
 				}
 				return
 			}
-			if *ppr != tc.out {
+			if ppr != tc.out {
 				t.Fatalf("got %v; want %v", ppr, tc.out)
 			}
 		})
