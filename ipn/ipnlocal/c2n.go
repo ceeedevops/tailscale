@@ -26,6 +26,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/httpm"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/version"
 )
 
@@ -222,9 +223,11 @@ func (b *LocalBackend) handleC2NPostureIdentityGet(w http.ResponseWriter, r *htt
 
 	res := tailcfg.C2NPostureIdentityResponse{}
 
-	// TODO(kradalby): Use syspolicy + envknob to allow Win registry,
-	// macOS defaults and env to override this setting.
-	if b.Prefs().PostureChecking() {
+	// Only collect serial numbers if enabled on the client,
+	// this will first check syspolicy, MDM settings like Registry
+	// on Windows or defaults on macOS. If they are not set, it falls
+	// back to the cli-flag, `--posture-checking`.
+	if enabled, _ := syspolicy.GetBoolean(syspolicy.PostureChecking, b.Prefs().PostureChecking()); enabled {
 		sns, err := posture.GetSerialNumbers()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
